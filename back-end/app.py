@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 from flask_cors import CORS
 from flask_mail import Mail, Message
+from twilio.rest import Client
 import os
 from dotenv import load_dotenv
 
@@ -25,13 +26,27 @@ app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME")
 app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD")
 app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_USERNAME")
 
+# Twilio configuration
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+OWNER_PHONE_NUMBER = os.getenv("OWNER_PHONE_NUMBER")
+
 # Initialize extensions
 db = SQLAlchemy(app)
 mail = Mail(app)
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # Validate environment variables
 def validate_env_vars():
-    required_vars = ["MAIL_USERNAME", "MAIL_PASSWORD"]
+    required_vars = [
+        "MAIL_USERNAME",
+        "MAIL_PASSWORD",
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_PHONE_NUMBER",
+        "OWNER_PHONE_NUMBER"
+    ]
     for var in required_vars:
         if not os.getenv(var):
             raise RuntimeError(f"Missing required environment variable: {var}")
@@ -56,11 +71,22 @@ with app.app_context():
 # Utility function to send email notifications
 def send_admin_notification(subject, body):
     try:
-        msg = Message(subject, recipients=["samiraroble02@gmail.com"])
+        msg = Message(subject, recipients=[os.getenv("MAIL_USERNAME")])
         msg.body = body
         mail.send(msg)
     except Exception as e:
         app.logger.error(f"Failed to send email: {e}")
+
+# Utility function to send SMS notifications
+def send_sms_notification(message):
+    try:
+        twilio_client.messages.create(
+            body=message,
+            from_=TWILIO_PHONE_NUMBER,
+            to=OWNER_PHONE_NUMBER
+        )
+    except Exception as e:
+        app.logger.error(f"Failed to send SMS: {e}")
 
 # Routes
 @app.route("/api/signup", methods=["POST"])
@@ -143,10 +169,19 @@ def checkout():
             app.logger.error(f"Validation failed: {data}")
             return jsonify({"error": "All fields and cart items are required"}), 400
 
-        send_admin_notification(
-            subject="New Order Received",
-            body=f"Customer: {full_name}\nEmail: {email}\nAddress: {address}\nPayment Method: {payment_method}\nItems: {cart_items}",
+        order_summary = (
+            f"Customer: {full_name}\n"
+            f"Email: {email}\n"
+            f"Address: {address}\n"
+            f"Payment Method: {payment_method}\n"
+            f"Items: {cart_items}"
         )
+
+        # Send email notification
+        send_admin_notification(subject="New Order Received", body=order_summary)
+
+        # Send SMS notification
+        send_sms_notification(message=f"New order received from {full_name}. Total items: {len(cart_items)}.")
 
         return jsonify({"message": "Order placed successfully!"}), 201
 
